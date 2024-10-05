@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import ProductDetailAPIView, ProductListCreateAPIView, ReviewListCreateAPIView, ReviewDetailAPIView, CategoryView, TopProductsAPIView,CartView,CheckoutAPIView,CustomerOrderHistoryAPIView, SellerOrderHistoryAPIView,CheckProductInOrderHistoryAPIView,ProductFilterByCategoryAPIView
+from .views import ProductDetailAPIView, ProductListCreateAPIView, ReviewListCreateAPIView, ReviewDetailAPIView, CategoryView, TopProductsAPIView,CartView,CheckoutAPIView,CustomerOrderHistoryAPIView, SellerOrderHistoryAPIView,CheckProductInOrderHistoryAPIView,ProductFilterByCategoryAPIView,AdminOrderListAPIView, AdminOrderStatusUpdateAPIView,AdminProductStatusUpdateAPIView ,OrderItemBySellerView,UpdateOrderItemStatus
 
 urlpatterns = [
     path('products/', ProductListCreateAPIView.as_view(), name='product-list-create'),
@@ -13,9 +13,17 @@ urlpatterns = [
     path('products/top/', TopProductsAPIView.as_view(), name='top-products'),
     path('cart/', CartView.as_view(), name='cart'),  
     path('cart/item/<int:item_id>/', CartView.as_view(), name='cart-item'),  
+    path('orders/filter-by-seller/', OrderItemBySellerView.as_view(), name='orderitem-by-seller'),
+
+     path('orders/update-status/<int:order_item_id>/', UpdateOrderItemStatus.as_view(), name='update-order-status'),
+
     path('checkout/', CheckoutAPIView.as_view(), name='checkout'),
     path('orders/history/customer/', CustomerOrderHistoryAPIView.as_view(), name='customer-order-history'),
     path('seller-order-history/', SellerOrderHistoryAPIView.as_view(), name='seller-order-history'),
+    path('admin/porducthistory/', AdminOrderListAPIView.as_view(), name='admin-history')  ,
+
+    path('admin/orders/<int:order_id>/status/', AdminOrderStatusUpdateAPIView.as_view(), name='admin-order-status-update'),
+    path('admin/products/<int:product_id>/status/', AdminProductStatusUpdateAPIView.as_view(), name='admin-product-status-update'),
     
     
 ]

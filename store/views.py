@@ -4,9 +4,11 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from .models import Product, Review, Category, Cart, CartItems,Order, OrderItem
-from .serializer import ProductSerializer, ReviewSerializer, CategorySerializer,CartSerializer,OrderSerializer
+from .serializer import ProductSerializer, ReviewSerializer, CategorySerializer,CartSerializer,OrderSerializer,OrderItemSerializer,OrderItemStatusUpdateSerializer
 from django.db import transaction
 from rest_framework.generics import ListAPIView
+
+from rest_framework.permissions import IsAdminUser
 
 # CartSerializer, CartItemSerializer
 
@@ -230,6 +232,17 @@ class CartView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class OrderItemBySellerView(ListAPIView):
+    serializer_class = OrderItemSerializer
+    pagination_class= None
+    
+
+    def get_queryset(self):
+        seller_name = self.request.query_params.get('seller', None)
+        if seller_name:
+            return OrderItem.objects.filter(seller__username=seller_name)
+        return OrderItem.objects.none()
+
 # class CheckoutAPIView(APIView):
 #     @transaction.atomic
 #     def post(self, request):
@@ -274,58 +287,98 @@ class CartView(APIView):
 #         serializer = OrderSerializer(order)
 #         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
+# class CheckoutAPIView(APIView):
+#     @transaction.atomic
+#     def post(self, request):
+#         user = request.user
+#         cart = get_object_or_404(Cart, user=user, ordered=False)
+
+#         if cart.items.count() == 0:
+#             return Response({"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+#         order = Order.objects.create(user=user)
+#         total = 0
+
+#         for cart_item in cart.items.all():
+#             product = cart_item.product
+#             if product.quantity < cart_item.quantity:
+#                 return Response({"detail": f"Not enough {product.name} in stock."}, status=status.HTTP_400_BAD_REQUEST)
+
+#             product.quantity -= cart_item.quantity
+#             product.save()
+
+#             # Create OrderItem
+#             order_item = OrderItem.objects.create(
+#                 order=order,
+#                 product=cart_item.product,
+#                 quantity=cart_item.quantity,
+#                 size=cart_item.size,
+#                 color=cart_item.color,
+#                 price=cart_item.product.price * cart_item.quantity
+#             )
+
+#             total += order_item.price
+
+#             # Update seller's order history
+#             if product.user:  # Ensure that the product has a seller
+#                 # Create or update the seller's order
+#                 seller_order, created = Order.objects.get_or_create(
+#                     user=product.user,
+#                     ordered_at=order.ordered_at,
+#                     defaults={'total': 0}
+#                 )
+#                 seller_order.total += order_item.price
+#                 seller_order.save()
+
+#         order.total = total
+#         order.save()
+
+#         cart.ordered = True
+#         cart.save()
+
+#         serializer = OrderSerializer(order)
+#         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
 class CheckoutAPIView(APIView):
     @transaction.atomic
     def post(self, request):
         user = request.user
         cart = get_object_or_404(Cart, user=user, ordered=False)
-
+        
         if cart.items.count() == 0:
             return Response({"detail": "Cart is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-        order = Order.objects.create(user=user)
-        total = 0
+        # Calculate total
+        total = sum([item.product.price * item.quantity for item in cart.items.all()])
 
-        for cart_item in cart.items.all():
-            product = cart_item.product
-            if product.quantity < cart_item.quantity:
-                return Response({"detail": f"Not enough {product.name} in stock."}, status=status.HTTP_400_BAD_REQUEST)
+        # Create the order
+        order = Order.objects.create(
+            user=user,
+            total=total,
+            status='pending',  # New orders will be in pending status
+        )
 
-            product.quantity -= cart_item.quantity
-            product.save()
-
-            # Create OrderItem
-            order_item = OrderItem.objects.create(
+        # Move CartItems to OrderItems
+        for item in cart.items.all():
+            OrderItem.objects.create(
                 order=order,
-                product=cart_item.product,
-                quantity=cart_item.quantity,
-                size=cart_item.size,
-                color=cart_item.color,
-                price=cart_item.product.price * cart_item.quantity
+                product=item.product,
+                quantity=item.quantity,
+                size=item.size,
+                color=item.color,
+                price=item.product.price,
+                seller=item.product.user
             )
 
-            total += order_item.price
-
-            # Update seller's order history
-            if product.user:  # Ensure that the product has a seller
-                # Create or update the seller's order
-                seller_order, created = Order.objects.get_or_create(
-                    user=product.user,
-                    ordered_at=order.ordered_at,
-                    defaults={'total': 0}
-                )
-                seller_order.total += order_item.price
-                seller_order.save()
-
-        order.total = total
-        order.save()
-
+        # Mark cart as ordered
         cart.ordered = True
         cart.save()
 
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Clear the cart
+        cart.items.all().delete()
 
+        return Response({"message": "Order placed successfully. Pending approval by admin."}, status=status.HTTP_201_CREATED)
 
 
 
@@ -349,3 +402,97 @@ class SellerOrderHistoryAPIView(ListAPIView):
             return Order.objects.filter(user=self.request.user).order_by('-ordered_at')
         return Order.objects.none() 
 
+
+
+class AdminOrderListAPIView(ListAPIView):
+    queryset = Order.objects.all()
+    serializer_class = OrderSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = None
+
+    def get_queryset(self):
+        return Order.objects.all().order_by('-ordered_at')
+
+
+class AdminOrderStatusUpdateAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, order_id):
+        try:
+            order = Order.objects.get(id=order_id)
+            new_status = request.data.get('status')  # Assuming status is passed in the request data
+            if new_status:
+                order.status = new_status
+                order.save()
+                return Response({'message': 'Order status updated successfully'}, status=status.HTTP_200_OK)
+            return Response({'error': 'No status provided'}, status=status.HTTP_400_BAD_REQUEST)
+        except Order.DoesNotExist:
+            return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+
+# View to handle product status change by admin
+class AdminProductStatusUpdateAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, product_id):
+        try:
+            product = Product.objects.get(id=product_id)
+            new_status = request.data.get('status')  # Assuming status is passed in the request data
+            if new_status:
+                product.status = new_status
+                product.save()
+                return Response({'message': 'Product status updated successfully'}, status=status.HTTP_200_OK)
+            return Response({'error': 'No status provided'}, status=status.HTTP_400_BAD_REQUEST)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+
+
+
+
+
+# class UpdateOrderStatusView(APIView):
+
+#     def post(self, request, order_id):
+#         try:
+#             order_item = OrderItem.objects.get(id=order_id)
+#             status_value = request.data.get('status', None)
+            
+#             if status_value not in dict(OrderItem.STATUS_CHOICES).keys():
+#                 return Response({"error": "Invalid status value"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             order_item.status = status_value
+#             order_item.save()
+
+#             return Response({"message": "Status updated successfully"}, status=status.HTTP_200_OK)
+#         except OrderItem.DoesNotExist:
+#             return Response({"error": "Order item not found"}, status=status.HTTP_404_NOT_FOUND)
+        
+
+class UpdateOrderItemStatus(APIView):
+
+    def get(self, request, order_item_id, *args, **kwargs):
+        try:
+            # Get the order item and ensure the requesting user is the seller
+            order_item = OrderItem.objects.get(id=order_item_id, seller=request.user)
+        except OrderItem.DoesNotExist:
+            return Response({"error": "Order item not found or you are not authorized."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serialize and return the current order item details, including the status
+        serializer = OrderItemStatusUpdateSerializer(order_item)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # Handle POST request to update the order item status
+    def post(self, request, order_item_id, *args, **kwargs):
+        try:
+            # Get the order item and ensure the requesting user is the seller
+            order_item = OrderItem.objects.get(id=order_item_id, seller=request.user)
+        except OrderItem.DoesNotExist:
+            return Response({"error": "Order item not found or you are not authorized."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Serialize and update the status
+        serializer = OrderItemStatusUpdateSerializer(order_item, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Status updated successfully"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
